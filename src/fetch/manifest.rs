@@ -3,9 +3,9 @@ use checksums::Algorithm::SHA1 as ALGSHA1;
 use checksums::hash_file;
 
 use std::collections::HashMap;
-use std::{fs, io};
+use std::fs;
 use std::path::Path;
-use std::process::Command;
+use reqwest::blocking::Client;
 
 const URL_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
@@ -181,14 +181,13 @@ pub struct DataObject {
 impl Manifest {
 	// Manifest is important thing for getting up to date assets
 	// If we can't get it, then only hash checking of saved versions will work
-	pub async fn new() -> Option<Manifest> {
+	pub fn new() -> Option<Manifest> {
 		let url = String::from(URL_MANIFEST);
-		let response = reqwest::Client::new()
+		let response = Client::new()
 			.get(url)
-			.send()
-			.await;
+			.send();
 		if let Ok(text) = response {
-			return Some(text.json().await.unwrap());
+			return Some(text.json().unwrap());
 		} else {
 			return None;
 		}
@@ -208,8 +207,8 @@ impl Manifest {
 }
 
 impl VersionManifest {
-	pub async fn new(version_id: &String) -> Option<VersionManifest> {
-		let manifest = Manifest::new().await;
+	pub fn new(version_id: &String) -> Option<VersionManifest> {
+		let manifest = Manifest::new();
 
 		if let Some(response) = manifest {
 			return response.get_for_version(&version_id);
@@ -220,7 +219,7 @@ impl VersionManifest {
 }
 
 impl VersionPackage {
-	pub async fn new(version: &String, manifest: &Option<VersionManifest>) -> Result<VersionPackage, Box<dyn std::error::Error>> {
+	pub fn new(version: &String, manifest: &Option<VersionManifest>) -> Result<VersionPackage, Box<dyn std::error::Error>> {
 		// If we can't get manifest, final try is read cached version json
 		if manifest.is_none() {
 			return Self::read_from_file(version);
@@ -242,13 +241,12 @@ impl VersionPackage {
 			return Ok(Self::read_from_file(version)?);
 		}
 
-		let response = reqwest::Client::new()
+		let response = Client::new()
 			.get(url)
-			.send()
-			.await;
+			.send();
 
 		if let Ok(response) = response {
-			return Ok(response.json().await?);
+			return Ok(response.json()?);
 		} else {
 			return Self::read_from_file(version);
 		};
@@ -268,71 +266,13 @@ impl VersionPackage {
 		)
 	}
 
-	pub fn launch(&self) -> Result<(), Box<dyn std::error::Error>>{
-		let main_class = format!("data/libraries/net/minecraft/client/{}/client-{}-official.jar",
-			self.id, self.id
-		);
-		let mut class_path = self.libraries
-			.iter()
-			.filter(|lib| lib.downloads.artifact.is_some())
-			.map(|lib|
-				format!("data/libraries/{}",
-					lib.downloads.artifact.as_ref()
-						.unwrap()
-						.path
-				)
-			)
-			.collect::<Vec<_>>()
-			.join(":");
-
-		class_path = format!("\"{}:{}\"", class_path, main_class);
-
-		let minecraft_arguments = &self.minecraft_arguments.as_ref().unwrap();
-
-		let mut args = vec![
-			"/usr/bin/env",
-			"java",
-			"-Djava.library.path=data/natives",
-            "-Xmx4G",
-            "-Xms1G",
-			"-cp", &class_path,
-			&self.main_class,
-		];
-		for arg in minecraft_arguments.split(' ') {
-			args.push(match arg {
-				"${auth_player_name}" => "Player", // Replace with real auth
-				"${version_name}" => &self.id,
-				"${game_directory}" => "data/instance",
-				"${assets_root}" => "data/assets",
-				"${assets_index_name}" => &self.assets,
-				"${auth_uuid}" => "0",
-				"${auth_access_token}" => "0",
-				"${user_type}" => "offline",
-				"${version_type}" => &self.r#type,
-				_ => arg,
-			});
-		};
-
-	let command = args.join(" ");
-
-	Command::new("sh")
-			.arg("-c")
-			.arg(dbg!(command))
-			.spawn()?
-			.wait()?;
-
-		Ok(())
-	}
-
-	pub async fn get_data_objects(&self) -> Result<Vec<DataObject>, Box<dyn std::error::Error>> {
-		let client = reqwest::Client::new();
+	pub fn get_data_objects(&self) -> Result<Vec<DataObject>, Box<dyn std::error::Error>> {
+		let client = Client::new();
 
 		let assets_response = client
 			.get(self.asset_index.url.as_str())
-			.send()
-			.await?
-			.json::<AssetsObjects>()
-			.await?;
+			.send()?
+			.json::<AssetsObjects>()?;
 
 		let mut objects: Vec<DataObject> = Default::default();
 
