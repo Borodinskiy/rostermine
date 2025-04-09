@@ -5,21 +5,17 @@ mod fetch;
 mod parse;
 
 use parse::parse_arguments;
-
 use fetch::version::Version;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-	//let match_result = parse_arguments();
+	let match_result = parse_arguments();
 
-	let version = dbg!(Version::new(String::from("1.12.2")).await?);
+	let version_id = String::from("1.14");
 
-	version.download_client().await?;
-	version.download_assets().await?;
-	version.download_libraries().await?;
-	version.download_natives().await?;
+	let version_1_12 = Version::new(&version_id).await;
 
-	version.launch()?;
+	version_1_12.unwrap().update().await;
 
 	Ok(())
 }
