@@ -10,6 +10,6 @@ reqwest = { version = "0.12.15", features = ["blocking", "json"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 sha2 = "0.10.8"
-tokio = { version = "1.44.2", features = ["full"] }
+tokio = { version = "1.44.2", features = ["rt", "macros", "fs", "rt-multi-thread"] }
 uuid = { version = "1.16.0", features = ["v4", "v5"] }
 zip = "2.6.1"

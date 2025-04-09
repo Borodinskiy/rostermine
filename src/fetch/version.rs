@@ -1,12 +1,13 @@
-use std::collections::HashMap;
 
 use tokio::fs::File;
-use std::path::Path;
+use tokio::fs;
+use std::{hash::DefaultHasher, path::Path, thread::JoinHandle};
 use tokio::io::AsyncWriteExt;
+use reqwest::Client;
 use checksums::hash_file;
 use checksums::Algorithm::SHA1 as ALGSHA1;
 
-use super::manifest::{VersionManifest, VersionPackage};
+use super::manifest::{DataObject, VersionManifest, VersionPackage};
 
 pub struct Version {
 	// Required for certain checks
@@ -27,21 +28,39 @@ impl Version {
 		})
 	}
 
-	//#[tokio::main]
-	pub async fn update(&self) {
+	pub async fn update(&self) -> Result<(), Box<dyn std::error::Error>> {
 		let download_pool = self.package.get_data_objects().await.unwrap();
 
+		let client = Client::new();
+
+		let mut i = 1;
+		let max = download_pool.len();
 		for object in download_pool {
-			println!("PATH: {}\nURL: {}\n",
-				object.path,
-				object.url
-			);
+			println!("Task: {}/{}", i, max);
+			Version::update_task(&client, object).await;
+			i += 1;
+		};
+		
+		Ok(())
+	}
+
+	async fn update_task(client: &Client, object: DataObject) {
+		println!("PATH: {}\nURL: {}",
+			object.path,
+			object.url
+		);
+		
+		
+		if object.is_cached() {
+			println!("SATISFIED\n");
+			return;
 		}
 		
-	}
-}
+		let path = Path::new(&object.path);
+		fs::create_dir_all(path.parent().unwrap()).await.unwrap();
 
-fn check_existance(path: &Path, hash: &String) -> bool {
-	if ! Path::exists(path) { return false }
-	*hash == hash_file(path, ALGSHA1).to_lowercase()
+		println!("GET\n");
+		let bytes = client.get(&object.url).send().await.unwrap().bytes().await.unwrap();
+		fs::write(path, bytes).await.unwrap();
+	}
 }

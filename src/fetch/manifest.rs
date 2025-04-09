@@ -223,7 +223,7 @@ impl VersionPackage {
 	pub async fn new(version: &String, manifest: &Option<VersionManifest>) -> Result<VersionPackage, Box<dyn std::error::Error>> {
 		// If we can't get manifest, final try is read cached version json
 		if manifest.is_none() {
-			return Ok(Self::read_from_file(version)?);
+			return Self::read_from_file(version);
 		}
 
 		let url = &manifest.as_ref().unwrap().url;
@@ -250,11 +250,11 @@ impl VersionPackage {
 		if let Ok(response) = response {
 			return Ok(response.json().await?);
 		} else {
-			return Ok(Self::read_from_file(version)?);
+			return Self::read_from_file(version);
 		};
 	}
 
-	fn read_from_file(version: &String) -> Result<VersionPackage, io::Error> {
+	fn read_from_file(version: &String) -> Result<VersionPackage, Box<dyn std::error::Error>> {
 		Ok(
 			serde_json::from_str(
 				fs::read_to_string(
@@ -383,7 +383,7 @@ impl VersionPackage {
 
 		for library in natives {
 			for (name, native) in library.downloads.classifiers.as_ref().unwrap() {
-				if name != "natives-linux" { continue; }
+				if name != "natives-windows" { continue; }
 
 				let path = format!("data/natives/{}", native.path);
 				objects.push(DataObject {
@@ -399,7 +399,7 @@ impl VersionPackage {
 		*/
 
 		{
-			let path= format!(
+			let path = format!(
 				"data/libraries/net/minecraft/client/{}/client-{}-official.jar",
 				self.id, self.id
 			);
@@ -419,4 +419,12 @@ impl VersionPackage {
 fn check_existance(path: &Path, hash: &String) -> bool {
 	if ! Path::exists(path) { return false }
 	*hash == hash_file(path, ALGSHA1).to_lowercase()
+}
+
+impl DataObject {
+	pub fn is_cached(&self) -> bool {
+		let path = Path::new(&self.path);
+		if ! Path::exists(path) { return false }
+		self.hash == hash_file(path, ALGSHA1).to_lowercase()
+	}
 }
