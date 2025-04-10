@@ -2,64 +2,61 @@ use std::path::Path;
 use std::fs;
 use reqwest::blocking::Client;
 use std::process::Command;
+use crate::util::error::Error;
 
-use super::manifest::{DataObject, VersionManifest, VersionPackage};
+use super::json::{DataObject, Manifest, VersionPackage, VersionPackageManifest};
 
 pub struct Version {
 	// Required for certain checks
 	package: VersionPackage,
-	// Optional for offline
-	manifest: Option<VersionManifest>,
 }
 
 impl Version {
-	pub fn new(version_id: &String) -> Option<Version> {
-		let manifest = VersionManifest::new(&version_id);
+	pub fn new(version_id: &String) -> Result<Version, Error> {
+		let manifest = Manifest::new().unwrap();
+		let version_manifest = VersionPackageManifest::new(&version_id, &manifest);
 
-		let package = VersionPackage::new(&version_id, &manifest).unwrap();
-
-		Some(Self {
-			package,
-			manifest,
+		Ok(Self {
+			package: VersionPackage::new(&version_id, &version_manifest)?,
 		})
 	}
 
-	pub fn update(&self) -> Result<(), Box<dyn std::error::Error>> {
-		let download_pool = self.package.get_data_objects().unwrap();
+	pub fn update(&self) -> Result<(), Error> {
+		let objects = self.package.get_data_objects()?;
 
 		let client = Client::new();
 
-		let mut i = 1;
-		let max = download_pool.len();
-		for object in download_pool {
+		let mut i = 1usize;
+		let max = objects.len();
+		for object in objects {
 			println!("Task: {}/{}", i, max);
-			Version::update_task(&client, object);
+			Version::update_task(&client, &object);
 			i += 1;
 		};
 		
 		Ok(())
 	}
 
-	fn update_task(client: &Client, object: DataObject) {
-		println!("PATH: {}\nURL: {}",
-			object.path,
-			object.url
-		);
-		
-		if object.is_cached() {
-			println!("SATISFIED\n");
-			return;
-		}
+	fn update_task(client: &Client, object: &DataObject) {
+		if object.is_cached() { return; }
 		
 		let path = Path::new(&object.path);
 		fs::create_dir_all(path.parent().unwrap()).unwrap();
 
-		println!("GET\n");
-		let bytes = client.get(&object.url).send().unwrap().bytes().unwrap();
-		fs::write(path, bytes).unwrap();
+		println!("GET: {}\n", object.url);
+		loop {
+			match client.get(&object.url).send() {
+				Ok(response) => {
+					let bytes = response.bytes().unwrap();
+					fs::write(path, bytes).unwrap();
+					break;
+				},
+				Err(e) => println!("GET ERROR: {e}\nRetrying. . ."),
+			}
+		}
 	}
 
-	pub fn launch(&self) -> Result<(), Box<dyn std::error::Error>>{
+	pub fn launch(&self) -> Result<(), Error>{
 		let main_class = format!("data/libraries/net/minecraft/client/{}/client-{}-official.jar",
 			self.package.id, self.package.id
 		);
@@ -79,7 +76,7 @@ impl Version {
 
 		class_path = format!("{};{}", class_path, main_class);
 
-		let minecraft_arguments = &self.package.minecraft_arguments.as_ref().unwrap();
+		let minecraft_arguments = "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userType ${user_type} --versionType ${version_type}";
 
 		let mut args = vec![
 			"-Djava.library.path=data/natives",

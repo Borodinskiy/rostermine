@@ -7,6 +7,25 @@
 		{
 			"type": "lldb",
 			"request": "launch",
+			"name": "Debug release executable 'rostermine'",
+			"cargo": {
+				"args": [
+					"build",
+					"--bin=rostermine",
+					"--package=rostermine",
+					"--release"
+				],
+				"filter": {
+					"name": "rostermine",
+					"kind": "bin"
+				}
+			},
+			"args": [],
+			"cwd": "${workspaceFolder}"
+		},
+		{
+			"type": "lldb",
+			"request": "launch",
 			"name": "Debug executable 'rostermine'",
 			"cargo": {
 				"args": [
