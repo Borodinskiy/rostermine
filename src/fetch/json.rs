@@ -98,22 +98,30 @@ pub struct DataObject {
 	pub path: String,
 	pub url: String,
 	#[serde(alias = "sha1", alias = "hash")]
-	pub hash: String,
+	pub hash: Box<str>,
 }
 
 impl Manifest {
-	// Manifest is important thing for getting up to date assets
-	// If we can't get it, then only hash checking of saved versions will work
+	// Manifest is important thing for retrieving up to date game resources
+	// If we can't get it, then hash checking of saved versions won't fix errors
 	pub fn new() -> Option<Self> {
-		let url = String::from(URL_MANIFEST);
 		let response = Client::new()
-			.get(url)
+			.get(URL_MANIFEST)
 			.send();
+
+		let path = Path::new("data/version_manifest_v2.json");
+		let mut str: String = Default::default();
+
 		if let Ok(text) = response {
-			return Some(text.json().unwrap());
-		} else {
-			return None;
+			str = text.text().unwrap();
+			fs::write(path, &str).unwrap();
+		} else if let Ok(text) = fs::read_to_string(path) {
+			str = text;
 		}
+
+		if str.len() == 0 { return None };
+
+		return Some(serde_json::from_str(&str).unwrap());
 	}
 
 	pub fn get_for_version(&self, version_id: &String) -> Option<VersionPackageManifest> {
@@ -194,15 +202,16 @@ impl VersionPackage {
 		*/
 
 		for (_, asset) in &assets_response.objects {
-			let asset_2 = &asset.hash[0..2];
+			let relpath = format!("{}/{}",
+				&asset.hash[0..2], asset.hash);
 			objects.push(DataObject {
 				path: format!(
-					"data/assets/objects/{}/{}",
-					asset_2, asset.hash
+					"data/assets/objects/{}",
+					relpath,
 				),
 				url: format!(
-					"https://resources.download.minecraft.net/{}/{}",
-					asset_2, asset.hash
+					"https://resources.download.minecraft.net/{}",
+					relpath,
 				),
 				hash: asset.hash.clone(),
 			});
@@ -265,6 +274,6 @@ impl DataObject {
 	pub fn is_cached(&self) -> bool {
 		let path = Path::new(&self.path);
 
-		Path::exists(path) && self.hash == hash_file(path, ALGSHA1).to_lowercase()
+		Path::exists(path) && self.hash == hash_file(path, ALGSHA1).to_lowercase().into_boxed_str()
 	}
 }

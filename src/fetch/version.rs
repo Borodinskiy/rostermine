@@ -29,7 +29,7 @@ impl Version {
 		let mut i = 1usize;
 		let max = objects.len();
 		for object in objects {
-			println!("Task: {}/{}", i, max);
+			println!("Check: {}/{}", i, max);
 			Version::update_task(&client, &object);
 			i += 1;
 		};
@@ -76,7 +76,8 @@ impl Version {
 
 		class_path = format!("{};{}", class_path, main_class);
 
-		let minecraft_arguments = "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userType ${user_type} --versionType ${version_type}";
+		let minecraft_arguments = "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userType ${user_type} --versionType ${version_type}"
+			.split(' ');
 
 		let mut args = vec![
 			"-Djava.library.path=data/natives",
@@ -85,11 +86,11 @@ impl Version {
 			"-cp", &class_path,
 			&self.package.main_class,
 		];
-		for arg in minecraft_arguments.split(' ') {
+		for arg in minecraft_arguments {
 			args.push(match arg {
 				"${auth_player_name}" => "Player", // Replace with real auth
 				"${version_name}" => &self.package.id,
-				"${game_directory}" => "data/instance",
+				"${game_directory}" => "data/instances/Default",
 				"${assets_root}" => "data/assets",
 				"${assets_index_name}" => &self.package.assets,
 				"${auth_uuid}" => "0",
