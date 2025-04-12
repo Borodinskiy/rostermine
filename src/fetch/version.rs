@@ -4,7 +4,7 @@ use reqwest::blocking::Client;
 use std::process::Command;
 use crate::util::error::Error;
 
-use super::json::{DataObject, Manifest, VersionPackage, VersionPackageManifest};
+use super::vanilla::{DataObject, Manifest, VersionPackage};
 
 pub struct Version {
 	// Required for certain checks
@@ -14,10 +14,12 @@ pub struct Version {
 impl Version {
 	pub fn new(version_id: &String) -> Result<Version, Error> {
 		let manifest = Manifest::new().unwrap();
-		let version_manifest = VersionPackageManifest::new(&version_id, &manifest);
+		let version_manifest = manifest
+			.get_for_version(version_id)
+			.expect("Failed to find sufficient minecraft version");
 
 		Ok(Self {
-			package: VersionPackage::new(&version_id, &version_manifest)?,
+			package: VersionPackage::new(&version_manifest)?,
 		})
 	}
 
@@ -29,29 +31,35 @@ impl Version {
 		let mut i = 1usize;
 		let max = objects.len();
 		for object in objects {
-			println!("Check: {}/{}", i, max);
-			Version::update_task(&client, &object);
+			print!("Check: {}/{}: ", i, max);
+			Self::update_task(&client, &object);
 			i += 1;
 		};
-		
+
+		self.package.extract_natives()?;
+
 		Ok(())
 	}
 
 	fn update_task(client: &Client, object: &DataObject) {
-		if object.is_cached() { return; }
+		if object.is_cached() {
+			println!("OK");
+			return;
+		}
 		
 		let path = Path::new(&object.path);
 		fs::create_dir_all(path.parent().unwrap()).unwrap();
 
-		println!("GET: {}\n", object.url);
+		println!("GET {}", object.url);
 		loop {
 			match client.get(&object.url).send() {
 				Ok(response) => {
-					let bytes = response.bytes().unwrap();
-					fs::write(path, bytes).unwrap();
-					break;
+					if let Ok(bytes) = response.bytes() {
+						fs::write(path, bytes).unwrap();
+						break;
+					}
 				},
-				Err(e) => println!("GET ERROR: {e}\nRetrying. . ."),
+				Err(e) => println!(" ERROR: {e}\nRetrying. . ."),
 			}
 		}
 	}
@@ -72,15 +80,17 @@ impl Version {
 				)
 			)
 			.collect::<Vec<_>>()
-			.join(";");
+			.join(":");
 
-		class_path = format!("{};{}", class_path, main_class);
+		class_path = format!("{}:{}", class_path, main_class);
+
+		let natives_arg = format!("-Djava.library.path='data/versions/{}/natives/extracted'", self.package.id);
 
 		let minecraft_arguments = "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userType ${user_type} --versionType ${version_type}"
 			.split(' ');
 
 		let mut args = vec![
-			"-Djava.library.path=data/natives",
+			&natives_arg,
 			"-Xms1G",
 			"-Xmx4G",
 			"-cp", &class_path,

@@ -1,2 +1,2 @@
-pub mod json;
+pub mod vanilla;
 pub mod version;
