@@ -1,7 +1,11 @@
 use std::path::Path;
 use std::fs;
-use reqwest::blocking::Client;
 use std::process::Command;
+
+use reqwest::blocking::Client;
+
+use indicatif::{ProgressBar, ProgressStyle};
+
 use crate::util::error::Error;
 
 use super::vanilla::{DataObject, Manifest, VersionPackage};
@@ -15,8 +19,8 @@ impl Version {
 	pub fn new(version_id: &String) -> Result<Version, Error> {
 		let manifest = Manifest::new().unwrap();
 		let version_manifest = manifest
-			.get_for_version(version_id)
-			.expect("Failed to find sufficient minecraft version");
+			.get_for_version(version_id);
+//			.expect("Failed to find sufficient minecraft version");
 
 		Ok(Self {
 			package: VersionPackage::new(&version_manifest)?,
@@ -24,33 +28,48 @@ impl Version {
 	}
 
 	pub fn update(&self) -> Result<(), Error> {
+		let client = Client::new();
+		
 		let objects = self.package.get_data_objects()?;
 
-		let client = Client::new();
+		let mut size = 0;
+		for object in &objects {
+			size += object.size;
+		}
+		println!("Size in storage: {} MB", size as f32 / 1048576f32);
 
-		let mut i = 1usize;
-		let max = objects.len();
-		for object in objects {
-			print!("Check: {}/{}: ", i, max);
-			Self::update_task(&client, &object);
-			i += 1;
+		let bar = ProgressBar::new(objects.len() as u64).with_style(
+			ProgressStyle::with_template(&"[{elapsed_precise}] {msg}\n{bar:20} {pos:>5}/{len}")
+				.expect("error in... Progress bar styling :/")
+		);
+
+		println!("Checking objects in storage. . .");
+		for object in &objects {
+			Self::update_task(&client, &bar, &object);
+			bar.inc(1);
 		};
+
+		bar.set_message("DONE!");
+		bar.finish();
 
 		self.package.extract_natives()?;
 
 		Ok(())
 	}
 
-	fn update_task(client: &Client, object: &DataObject) {
+	fn update_task(client: &Client, bar: &ProgressBar, object: &DataObject) {
 		if object.is_cached() {
-			println!("OK");
+			if bar.message() != "OK" {
+				bar.set_message("OK");
+			}
 			return;
 		}
 		
 		let path = Path::new(&object.path);
-		fs::create_dir_all(path.parent().unwrap()).unwrap();
+		fs::create_dir_all(path.parent().unwrap())
+			.expect("failed to create dir for data object");
 
-		println!("GET {}", object.url);
+		bar.set_message(format!("GET {}", object.url));
 		loop {
 			match client.get(&object.url).send() {
 				Ok(response) => {
@@ -59,7 +78,7 @@ impl Version {
 						break;
 					}
 				},
-				Err(e) => println!(" ERROR: {e}\nRetrying. . ."),
+				Err(e) => bar.set_message(format!("ERROR: {e}\nRetrying. . .")),
 			}
 		}
 	}

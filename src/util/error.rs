@@ -13,7 +13,4 @@ pub enum Error {
 
 	#[error("failure in json parsing: {0}")]
 	JSONParse(#[from] serde_json::Error),
-
-	#[error("failure in zip extraction: {0}")]
-	ZipError(#[from] zip_extract::ZipError)
 }

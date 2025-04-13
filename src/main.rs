@@ -2,14 +2,16 @@ mod auth;
 mod fetch;
 mod util;
 
-use fetch::version::Version;
+use fetch::{vanilla::Manifest, version::Version};
 use util::error::Error;
 
 fn main() -> Result<(), Error> {
-	let version = Version::new(&String::from("1.21"))?;
+	let manifest = Manifest::new()?;
+	for version in manifest.versions {
+		println!("\nUpdating version {}. . .", &version.id);
+		let version = Version::new(&version.id)?;
+		version.update()?;
+	}
 
-	version.update()?;
-	version.launch()?;
-	
 	Ok(())
 }

@@ -11,6 +11,7 @@ use checksums::hash_file;
 use checksums::Algorithm::SHA1 as ALGSHA1;
 
 use crate::util::error::Error;
+
 /* MANIFEST
 * Minecraft version manifest - file that tells us information about minecraft download data
 * It contains 2 root structures:
@@ -53,7 +54,7 @@ pub struct VersionPackageManifest {
 * - "libraries": huge array with list of java libraries and some natives
 * - "logging": some logging configuration
 * - "mainClass": path to java main class (ex.: net.minecraft.client.main.Main)
-* - "minecraftArguments": list/array of arguments, that should be passed to correspond minecraft version at launch
+* - "arguments", "minecraftArguments": list/array of arguments, that should be passed to correspond minecraft version and jvm at launch
 * - "releaseTime": game release date
 * - "type": version type (snapshot/release)
 */
@@ -75,7 +76,9 @@ pub struct VersionPackage {
 	#[serde(rename = "mainClass")]
 	pub main_class: String,
 	#[serde(rename = "minecraftArguments")]
-	pub minecraft_arguments: Option<MinecraftArguments>,
+	pub minecraft_arguments: Option<String>,
+	#[serde(rename = "arguments")]
+	pub arguments: Option<ExecArgumentsArray>,
 	#[serde(rename = "releaseTime")]
 	pub release_time: String,
 	pub r#type: String,
@@ -114,11 +117,23 @@ pub struct LoggingRuleFile {
 	pub size: i32,
 	pub url: String,
 }
+#[derive(Default, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExecArgumentsArray {
+	pub game: Vec<ExecArgument>,
+	pub jvm: Vec<ExecArgument>,
+}
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum MinecraftArguments {
+pub enum ExecArgument {
 	String(String),
-	Array { name: String },
+	Object(ExecArgumentRuled),
+}
+#[derive(Default, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExecArgumentRuled {
+	#[serde(flatten)]
+	pub extra: HashMap<String, serde_json::Value>,
 }
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -130,6 +145,7 @@ pub struct AssetsObjects {
 #[serde(default)]
 pub struct DataObject {
 	pub path: String,
+	pub size: usize,
 	pub url: String,
 	#[serde(alias = "sha1", alias = "hash")]
 	pub hash: Box<str>,
@@ -174,7 +190,7 @@ impl Manifest {
 
 		// TODO: Change hashing library to normal
 		let hash: String;
-		if fs::exists(path).is_ok() {
+		if Path::exists(path) {
 			hash = hash_file(path, ALGSHA1);
 		} else {
 			hash = String::from("");
@@ -189,14 +205,18 @@ impl Manifest {
 		Ok(serde_json::from_str(text.as_str())?)
 	}
 
-	pub fn get_for_version(&self, version_id: &String) -> Option<VersionPackageManifest> {
+	pub fn get_for_version(&self, version_id: &String) -> VersionPackageManifest {
 		match version_id.as_str() {
 			"release" | "snapshot" => self.get_for_version(&self.latest.get(version_id).unwrap()),
-			_ => self
-				.versions
-				.iter()
-				.find(|element| element.id == *version_id)
-				.cloned(),
+			_ => if let Some(manifest) = self
+					.versions
+					.iter()
+					.find(|&element| element.id == *version_id)
+				{
+					return manifest.clone();
+				} else {
+					return self.get_for_version(&"release".to_string());
+				}
 		}
 	}
 }
@@ -237,15 +257,17 @@ impl VersionPackage {
 		// Magic number (because some libraries have additional download (native version)
 		// that is impossible to count at this stage. Usually it's 1-5 libs
 		let poolsize = 13 + assets_response.objects.len() + self.downloads.len() + self.libraries.len();
-		objects.try_reserve(poolsize).expect("failed to reserve memory for assets pool");
+		objects.try_reserve(poolsize)
+			.expect("failed to reserve memory for assets pool");
 
-		// Because AssetsObjects is a HashMap, but with useless info as hash ¯\_(ツ)_/¯
+		// Because "objects" is a HashMap, but with useless info as hash ¯\_(ツ)_/¯
 		for (_, asset) in &assets_response.objects {
 			let relpath = format!("{}/{}", &asset.hash[0..2], asset.hash);
 			objects.push(DataObject {
 				path: format!("data/assets/objects/{}", relpath,),
 				url: format!("https://resources.download.minecraft.net/{}", relpath,),
 				hash: asset.hash.clone(),
+				size: asset.size,
 			});
 		}
 
@@ -254,6 +276,7 @@ impl VersionPackage {
 		*/
 
 		for library in &self.libraries {
+			// Jar library
 			if library.downloads.artifact.is_some() {
 				let artifact = library.downloads.artifact.as_ref().unwrap();
 
@@ -264,6 +287,7 @@ impl VersionPackage {
 					..artifact.clone()
 				});
 			}
+			// Native dll/so library
 			if library.downloads.classifiers.is_some() {
 				for (name, native) in library.downloads.classifiers.as_ref().unwrap() {
 					if name != "natives-linux" {
@@ -291,22 +315,31 @@ impl VersionPackage {
 
 			objects.push(DataObject {
 				path,
-				..self.downloads.get("client").unwrap().clone()
+				..self.downloads
+					.get("client")
+					.expect("failed to get minecraft client object")
+					.clone()
 			});
 		}
 
-		println!("Vector length: {}, expected: {} (magic number: 13)", objects.len(), poolsize);
+		if objects.len() > poolsize {
+			println!("!!! WARNING !!!");
+			println!("Objects pool size is {}, but {} was reserved (magic number: 13)",
+				objects.len(), poolsize
+			);
+		}
 
 		Ok(objects)
 	}
 
 	pub fn extract_natives(&self) -> Result<(), Error> {
+		let host = format!("natives-{}", std::env::consts::OS);
+		println!("Extracting {}. . .", host);
 		for native in self
 			.libraries
 			.iter()
 			.filter(|&lib| lib.downloads.classifiers.is_some())
 		{
-			let host = format!("natives-{}", std::env::consts::OS);
 			for (os, object) in native.downloads.classifiers.as_ref().unwrap() {
 				if *os == host {
 					let path = PathBuf::from(format!("data/versions/{}/natives/{}",
@@ -317,9 +350,6 @@ impl VersionPackage {
 						self.id
 					));
 
-					println!("EXTRACT: {}\n-> {}",
-						path.to_string_lossy(), target.to_string_lossy()
-					);
 					let bytes = fs::read(path)?;
 
 					zip_extract::extract(io::Cursor::new(bytes), &target, true)
@@ -335,9 +365,15 @@ impl RetrieveManifest for VersionPackage {}
 
 fn check_existance(path: &Path, hash: &String) -> bool {
 	if Path::exists(path) {
-		return *hash.to_uppercase() == hash_file(path, ALGSHA1);
+		if *hash.to_uppercase() == hash_file(path, ALGSHA1) {
+			println!("Satisfied: {}", path.to_str().unwrap());
+			return true;
+		}
+		println!("Old version: {}", path.to_str().unwrap());
+		return false;
 	}
 	
+	println!("Not exits: {}", path.to_str().unwrap());
 	return false;
 }
 
