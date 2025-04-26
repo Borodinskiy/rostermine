@@ -373,7 +373,7 @@ fn check_existance(path: &Path, hash: &String) -> bool {
 		return false;
 	}
 	
-	println!("Not exits: {}", path.to_str().unwrap());
+	println!("Not exists: {}", path.to_str().unwrap());
 	return false;
 }
 

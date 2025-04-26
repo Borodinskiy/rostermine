@@ -7,7 +7,11 @@ use util::error::Error;
 
 fn main() -> Result<(), Error> {
 	let manifest = Manifest::new()?;
-	for version in manifest.versions {
+	for version in manifest
+		.versions
+		.iter()
+		.filter(|&ver| ver.r#type == "old_alpha")
+	{
 		println!("\nUpdating version {}. . .", &version.id);
 		let version = Version::new(&version.id)?;
 		version.update()?;

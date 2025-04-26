@@ -38,5 +38,17 @@ pkgs.mkShell {
 	];
 
 	RUST_SRC_PATH = with pkgs; "${rustPlatform.rustLibSrc}";
-	LD_LIBRARY_PATH = with pkgs // pkgs.xorg; "${libXxf86vm}/lib:${glfw}/lib:${libGL}/lib:${libXi}:${libXrandr}/lib:${libX11}/lib:${libXext}/lib:${libXcursor}/lib:${libXrandr}/pkgs:${glfw3-minecraft}/lib:${wayland}/lib";
+	LD_LIBRARY_PATH = with pkgs // pkgs.xorg; lib.makeLibraryPath [
+		libXxf86vm
+		glfw
+		libGL
+		libXi
+		libXrandr
+		libX11
+		libXext
+		libXcursor
+		libXrandr
+		glfw3-minecraft
+		wayland
+	];
 }

@@ -6,7 +6,7 @@ use reqwest::blocking::Client;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::util::error::Error;
+use crate::{main, util::error::Error};
 
 use super::vanilla::{DataObject, Manifest, VersionPackage};
 
@@ -39,7 +39,7 @@ impl Version {
 		println!("Size in storage: {} MB", size as f32 / 1048576f32);
 
 		let bar = ProgressBar::new(objects.len() as u64).with_style(
-			ProgressStyle::with_template(&"[{elapsed_precise}] {msg}\n{bar:20} {pos:>5}/{len}")
+			ProgressStyle::with_template(&"[{elapsed_precise}] {bar:20} {pos:>5}/{len} {msg}")
 				.expect("error in... Progress bar styling :/")
 		);
 
@@ -84,51 +84,55 @@ impl Version {
 	}
 
 	pub fn launch(&self) -> Result<(), Error>{
-		let main_class = format!("data/libraries/net/minecraft/client/{}/client-{}-official.jar",
-			self.package.id, self.package.id
-		);
-
 		let mut class_path = self.package.libraries
 			.iter()
 			.filter(|lib| lib.downloads.artifact.is_some())
-			.map(|lib|
-				format!("data/libraries/{}",
-					lib.downloads.artifact.as_ref()
-						.unwrap()
-						.path
-				)
-			)
-			.collect::<Vec<_>>()
-			.join(":");
+			.map(|lib| format!("data/libraries/{}",
+				lib.downloads.artifact.as_ref()
+					.unwrap()
+					.path
+			))
+			.collect::<Vec<_>>();
 
-		class_path = format!("{}:{}", class_path, main_class);
-
-		let natives_arg = format!("-Djava.library.path='data/versions/{}/natives/extracted'", self.package.id);
-
-		let minecraft_arguments = "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userType ${user_type} --versionType ${version_type}"
-			.split(' ');
+		class_path.push(format!(
+			"data/libraries/net/minecraft/client/{}/client-{}-official.jar",
+			self.package.id, self.package.id
+		));
+		let class_path_str = class_path.join(":");
 
 		let mut args = vec![
-			&natives_arg,
-			"-Xms1G",
-			"-Xmx4G",
-			"-cp", &class_path,
+			"-Xms1G", "-Xmx4G",
+			"-cp", class_path_str.as_str(),
+
 			&self.package.main_class,
 		];
-		for arg in minecraft_arguments {
-			args.push(match arg {
-				"${auth_player_name}" => "Player", // Replace with real auth
-				"${version_name}" => &self.package.id,
-				"${game_directory}" => "data/instances/Default",
-				"${assets_root}" => "data/assets",
-				"${assets_index_name}" => &self.package.assets,
-				"${auth_uuid}" => "0",
-				"${auth_access_token}" => "0",
-				"${user_type}" => "offline",
-				"${version_type}" => &self.package.r#type,
-				_ => arg,
-			});
-		};
+
+		let arguments: Vec<String>;
+		
+		if self.package.minecraft_arguments.is_some() {
+			arguments = self.package.minecraft_arguments.as_ref().unwrap().clone();
+		}
+		if let Some(arguments_array) = self.package.arguments {
+			match arguments_array.jvm {
+			};
+		}
+
+			// Inserting values into ${variables}
+			for arg in arguments.split(" ") {
+				arguments.push(match arg {
+					"${auth_player_name}" => "Player", // Replace with real auth
+					"${version_name}" => self.package.id.as_str(),
+					"${game_directory}" => "instances/Default",
+					"${assets_root}" => "data/assets",
+					"${assets_index_name}" => self.package.assets.as_str(),
+					"${auth_uuid}" => "0",
+					"${auth_access_token}" => "0",
+					"${user_type}" => "offline",
+					"${version_type}" => self.package.r#type.as_str(),
+
+					_ => arg,
+				});
+			};
 
 		Command::new("java")
 			.args(dbg!(args))
