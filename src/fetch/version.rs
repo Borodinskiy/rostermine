@@ -4,11 +4,11 @@ use std::process::Command;
 
 use reqwest::blocking::Client;
 
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
-use crate::{main, util::error::Error};
+use crate::util::error::Error;
 
-use super::vanilla::{DataObject, Manifest, VersionPackage};
+use super::vanilla::{DataObject, LaunchArgumentsType, Manifest, VersionPackage};
 
 pub struct Version {
 	// Required for certain checks
@@ -98,44 +98,65 @@ impl Version {
 			"data/libraries/net/minecraft/client/{}/client-{}-official.jar",
 			self.package.id, self.package.id
 		));
-		let class_path_str = class_path.join(":");
 
-		let mut args = vec![
-			"-Xms1G", "-Xmx4G",
-			"-cp", class_path_str.as_str(),
+		let separator = match std::env::consts::OS {
+			"linux" => ":",
 
-			&self.package.main_class,
+			_ => ";",
+		};
+
+		let class_path_str = class_path.join(separator);
+
+		let natives_directory = format!("data/versions/{}/natives/extracted", self.package.id);
+
+		let natives_override = [
+			format!("-Djava.library.path={natives_directory}"),
+			format!("-Djna.tmpdir={natives_directory}"),
+			format!("-Dorg.lwjgl.system.SharedLibraryExtractPath={natives_directory}"),
+			format!("-Dio.netty.native.workdir{natives_directory}"),
 		];
 
-		let arguments: Vec<String>;
-		
-		if self.package.minecraft_arguments.is_some() {
-			arguments = self.package.minecraft_arguments.as_ref().unwrap().clone();
-		}
-		if let Some(arguments_array) = self.package.arguments {
-			match arguments_array.jvm {
-			};
-		}
+		let mut jvm_arguments = vec![
+			"-Xms1G", "-Xmx4G",
+			"-cp", class_path_str.as_str(),
+		];
 
-			// Inserting values into ${variables}
-			for arg in arguments.split(" ") {
-				arguments.push(match arg {
-					"${auth_player_name}" => "Player", // Replace with real auth
-					"${version_name}" => self.package.id.as_str(),
-					"${game_directory}" => "instances/Default",
-					"${assets_root}" => "data/assets",
-					"${assets_index_name}" => self.package.assets.as_str(),
-					"${auth_uuid}" => "0",
-					"${auth_access_token}" => "0",
-					"${user_type}" => "offline",
-					"${version_type}" => self.package.r#type.as_str(),
+		jvm_arguments.push(&self.package.main_class);
 
-					_ => arg,
-				});
-			};
+		let minecraft_arguments: Vec<&str> = self
+			.package
+			.get_launch_arguments(LaunchArgumentsType::Game)
+			.expect("could not launch minecraft. No launch arguments in version manifest")
+			.iter()
+			.map(|&argument| match argument {
+				// already defined
+				"-cp" => "",
+				"${classpath}" => "",
+
+				"-Djava.library.path=${natives_directory}" => natives_override[0].as_str(),
+				"-Djna.tmpdir=${natives_directory}" => natives_override[1].as_str(),
+				"-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}" => natives_override[2].as_str(),
+				"-Dio.netty.native.workdir=${natives_directory}" => natives_override[3].as_str(),
+				"-Dminecraft.launcher.brand=${launcher_name}"=> "-Dminecraft.launcher.brand=rostermine",
+				"-Dminecraft.launcher.version=${launcher_version}" => "-Dminecraft.launcher.version=a0.0.1",
+
+				"${auth_player_name}" => "Player", // Replace with real auth
+				"${version_name}" => self.package.id.as_str(),
+				"${game_directory}" => "instances/Default",
+				"${assets_root}" => "data/assets",
+				"${assets_index_name}" => self.package.assets.as_str(),
+				"${auth_uuid}" => "0",
+				"${auth_access_token}" => "0",
+				"${user_type}" => "offline",
+				"${version_type}" => self.package.r#type.as_str(),
+
+				_ => argument,
+			})
+			.collect();
 
 		Command::new("java")
-			.args(dbg!(args))
+			.args(dbg!(jvm_arguments))
+			.args(dbg!(minecraft_arguments))
 			.spawn()?
 			.wait()?;
 

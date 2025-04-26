@@ -141,6 +141,11 @@ pub struct AssetsObjects {
 	pub objects: HashMap<String, DataObject>,
 }
 
+pub enum LaunchArgumentsType {
+	Game,
+	Jvm,
+}
+
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DataObject {
@@ -359,6 +364,36 @@ impl VersionPackage {
 		}
 
 		Ok(())
+	}
+
+	pub fn get_launch_arguments(&self, r#type: LaunchArgumentsType) -> Option<Vec<&str>> {
+		// If we have classic string with arguments in it
+		if let Some(arguments) = self.minecraft_arguments.as_ref() {
+			return Some(arguments.split(" ").collect());
+		}
+		// If we have some kind of pizdec
+		if let Some(arguments) = self.arguments.as_ref() {
+			let iter = match r#type {
+				LaunchArgumentsType::Game => arguments.game.iter(),
+				LaunchArgumentsType::Jvm => arguments.jvm.iter(),
+			};
+			let mut str: Vec<&str> = Default::default();
+
+			str.try_reserve(iter.clone().count())
+				.expect("failed to reserve memory for launch arguments generation");
+
+			for argument in iter {
+				str.push(match argument {
+					ExecArgument::String(string) => string.as_str(),
+					ExecArgument::Object(object) => {
+						""
+					},
+				});
+			}
+			return Some(str);
+		}
+
+		None
 	}
 }
 impl RetrieveManifest for VersionPackage {}
