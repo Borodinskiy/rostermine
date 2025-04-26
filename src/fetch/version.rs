@@ -4,7 +4,7 @@ use std::process::Command;
 
 use reqwest::blocking::Client;
 
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::util::error::Error;
 
@@ -99,13 +99,12 @@ impl Version {
 			self.package.id, self.package.id
 		));
 
-		let separator = match std::env::consts::OS {
+		let class_separator = match std::env::consts::OS {
 			"linux" => ":",
-
 			_ => ";",
 		};
 
-		let class_path_str = class_path.join(separator);
+		let class_path_str = class_path.join(class_separator);
 
 		let natives_directory = format!("data/versions/{}/natives/extracted", self.package.id);
 

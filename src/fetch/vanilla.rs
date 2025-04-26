@@ -220,6 +220,7 @@ impl Manifest {
 				{
 					return manifest.clone();
 				} else {
+					print!("FAILED \"{}\": no such version. Falling back to latest release", version_id);
 					return self.get_for_version(&"release".to_string());
 				}
 		}
