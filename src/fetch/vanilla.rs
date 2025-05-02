@@ -1,16 +1,16 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::fs;
 use std::io;
+use std::path::{Path, PathBuf};
 
-use reqwest::blocking::Client;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use checksums::hash_file;
-use checksums::Algorithm::SHA1 as ALGSHA1;
+use checksums::{hash_file, Algorithm};
 
 use crate::util::error::Error;
+
+use super::textfile::RetrievePlainText;
 
 /* MANIFEST
 * Minecraft version manifest - file that tells us information about minecraft download data
@@ -27,18 +27,18 @@ const URL_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manif
 pub struct Manifest {
 	// [Release/Snapshot] [correspond version]
 	pub latest: HashMap<String, String>,
-	pub versions: Vec<VersionPackageManifest>,
+	pub versions: Vec<VanillaManifest>,
 }
 
 // Here goes manifests for version package
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
-pub struct VersionPackageManifest {
+#[serde(rename_all = "snake_case")]
+pub struct VanillaManifest {
 	pub id: String,
 	pub r#type: String,
 	pub url: String,
 	pub time: String,
-	#[serde(rename = "releaseTime")]
 	pub release_time: String,
 	#[serde(rename = "sha1")]
 	pub hash: String,
@@ -60,34 +60,27 @@ pub struct VersionPackageManifest {
 */
 
 #[derive(Default, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct VersionPackage {
-	#[serde(rename = "assetIndex")]
+#[serde(default, rename_all = "camelCase")]
+pub struct Vanilla {
 	pub asset_index: DataObject,
 	pub assets: String,
 	// Client/Server
 	pub downloads: HashMap<String, DataObject>,
 	pub id: String,
-	#[serde(rename = "javaVersion")]
 	pub java_version: JavaVersion,
 	pub libraries: Vec<Library>,
 	// Client/Server
 	pub logging: HashMap<String, Logging>,
-	#[serde(rename = "mainClass")]
 	pub main_class: String,
-	#[serde(rename = "minecraftArguments")]
 	pub minecraft_arguments: Option<String>,
-	#[serde(rename = "arguments")]
 	pub arguments: Option<ExecArgumentsArray>,
-	#[serde(rename = "releaseTime")]
 	pub release_time: String,
 	pub r#type: String,
 }
 #[derive(Default, Debug, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct JavaVersion {
 	pub component: String,
-	#[serde(rename = "majorVersion")]
 	pub major_version: i32,
 }
 #[derive(Default, Debug, Serialize, Deserialize)]
@@ -95,6 +88,7 @@ pub struct JavaVersion {
 pub struct Library {
 	pub downloads: LibraryDownloads,
 	pub name: String,
+	pub rules: Option<Vec<Rule>>,
 }
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -102,20 +96,44 @@ pub struct LibraryDownloads {
 	pub artifact: Option<DataObject>,
 	pub classifiers: Option<HashMap<String, DataObject>>,
 }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Rule {
+	action: Action,
+	os: Option<OS>,
+}
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Action {
+	Allow,
+	Disallow,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub struct OS {
+	name: Option<OSName>,
+	arch: Option<OSArch>,
+}
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OSName {
+	Windows,
+	Linux,
+	OSX,
+	Undefined,
+}
+#[derive(PartialEq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OSArch {
+	X86,
+	X86_64,
+	Undefined,
+}
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Logging {
 	pub argument: String,
-	pub file: LoggingRuleFile,
+	pub file: DataObject,
 	pub r#type: String,
-}
-#[derive(Default, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct LoggingRuleFile {
-	pub id: String,
-	pub sha1: String,
-	pub size: i32,
-	pub url: String,
 }
 #[derive(Default, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -149,6 +167,7 @@ pub enum LaunchArgumentsType {
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DataObject {
+	#[serde(alias = "id", alias = "path")]
 	pub path: String,
 	pub size: usize,
 	pub url: String,
@@ -156,31 +175,52 @@ pub struct DataObject {
 	pub hash: Box<str>,
 }
 
-trait RetrieveManifest {
-	fn retrieve_manifest_text(savepath: &String, url: Option<&String>, hash: Option<&String>) -> Result<String, Error> {
-		let path = Path::new(savepath);
-		// If we have url and manifest's new hash different from hash of older
-		if url.is_some() && ! check_existance(path, hash.unwrap()) {
-			let url = url.unwrap();
-			let client = Client::new();
-
-			loop {
-				match client.get(url).send() {
-					Ok(response) => {
-						let text = response.text()?;
-						// Saving new manifest for future & offline work
-						fs::create_dir_all(path.parent().unwrap())?;
-						fs::write(path, &text)?;
-						return Ok(text);
-					},
-					Err(e) => println!("GET ERROR: {}: {}\nRetrying. . .",
-						url, e
-					),
-				}
+impl Rule {
+	pub fn check(&self, host: &OS) -> bool {
+		if let Some(os) = self.os.as_ref() {
+			if let Some(name) = os.name.as_ref() {
+				let hostname = host.name.as_ref().unwrap_or(&OSName::Undefined);
+				return (self.action == Action::Allow && *hostname == *name)
+				    || (self.action == Action::Disallow && *hostname != *name);
+			}
+			if let Some(arch) = os.arch.as_ref() {
+				let hostarch = host.arch.as_ref().unwrap_or(&OSArch::Undefined);
+				return (self.action == Action::Allow && *hostarch == *arch)
+				    || (self.action == Action::Disallow && *hostarch != *arch);
 			}
 		}
 
-		Ok(fs::read_to_string(path)?)
+		return self.action == Action::Allow;
+	}
+}
+
+impl OS {
+	pub fn current() -> Self {
+		Self {
+			name: Some(OSName::current()),
+			arch: Some(OSArch::current()),
+		}
+	}
+}
+
+impl OSName {
+	pub fn current() -> Self {
+		match &std::env::consts::OS {
+			&"linux" => OSName::Linux,
+			&"windows" => OSName::Windows,
+			&"macos" => OSName::OSX,
+			_ => OSName::Undefined,
+		}
+	}
+}
+
+impl OSArch {
+	pub fn current() -> Self {
+		match &std::env::consts::ARCH {
+			&"x86" => OSArch::X86,
+			&"x86_64" => OSArch::X86_64,
+			_ => OSArch::Undefined,
+		}
 	}
 }
 
@@ -196,50 +236,47 @@ impl Manifest {
 		// TODO: Change hashing library to normal
 		let hash: String;
 		if Path::exists(path) {
-			hash = hash_file(path, ALGSHA1);
+			hash = hash_file(path, Algorithm::SHA1);
 		} else {
 			hash = String::from("");
 		}
 
-		let text = Self::retrieve_manifest_text(
-			&path_str,
-			Some(&url),
-			Some(&hash)
-		)?;
+		let text = Self::retrieve_text(&path_str, Some(&url), Some(&hash))?;
 
 		Ok(serde_json::from_str(text.as_str())?)
 	}
 
-	pub fn get_for_version(&self, version_id: &String) -> VersionPackageManifest {
+	pub fn get_for_version(&self, version_id: &String) -> VanillaManifest {
 		match version_id.as_str() {
 			"release" | "snapshot" => self.get_for_version(&self.latest.get(version_id).unwrap()),
-			_ => if let Some(manifest) = self
+			_ => {
+				if let Some(manifest) = self
 					.versions
 					.iter()
 					.find(|&element| element.id == *version_id)
 				{
 					return manifest.clone();
 				} else {
-					print!("FAILED \"{}\": no such version. Falling back to latest release", version_id);
+					print!(
+						"FAILED \"{}\": no such version. Falling back to latest release",
+						version_id
+					);
 					return self.get_for_version(&"release".to_string());
 				}
+			}
 		}
 	}
 }
-impl RetrieveManifest for Manifest {}
+impl RetrievePlainText for Manifest {}
 
-impl VersionPackage {
-	pub fn new(manifest: &VersionPackageManifest) -> Result<VersionPackage, Error> {
+impl Vanilla {
+	pub fn new(manifest: &VanillaManifest) -> Result<Vanilla, Error> {
 		let path_str = format!("data/versions/{}/{}.json", manifest.id, manifest.id);
 		let text: String;
 
-		text = Self::retrieve_manifest_text(
-			&path_str,
-			Some(&manifest.url),
-			Some(&manifest.hash),
-		)?;
+		text = Self::retrieve_text(&path_str, Some(&manifest.url), Some(&manifest.hash))?;
 
-		Ok(serde_json::from_str(text.as_str())?)
+		Ok(dbg!(serde_json::from_str(text.as_str())?))
 	}
 
 	pub fn get_data_objects(&self) -> Result<Vec<DataObject>, Error> {
@@ -248,22 +285,24 @@ impl VersionPackage {
 		/*
 		ASSETS
 		*/
-		
+
 		let assets_response: AssetsObjects;
 		{
 			let path = format!("data/assets/indexes/{}.json", self.assets);
-			let text = Self::retrieve_manifest_text(
+			let text = Self::retrieve_text(
 				&path,
 				Some(&self.asset_index.url),
-				Some(&self.asset_index.hash.clone().into_string())
+				Some(&self.asset_index.hash.clone().into_string()),
 			)?;
 			assets_response = serde_json::from_str(text.as_str())?;
 		}
 
 		// Magic number (because some libraries have additional download (native version)
 		// that is impossible to count at this stage. Usually it's 1-5 libs
-		let poolsize = 13 + assets_response.objects.len() + self.downloads.len() + self.libraries.len();
-		objects.try_reserve(poolsize)
+		let poolsize =
+			13 + assets_response.objects.len() + self.downloads.len() + self.libraries.len();
+		objects
+			.try_reserve(poolsize)
 			.expect("failed to reserve memory for assets pool");
 
 		// Because "objects" is a HashMap, but with useless info as hash ¯\_(ツ)_/¯
@@ -281,11 +320,20 @@ impl VersionPackage {
 			LIBRARIES
 		*/
 
+		let host = OS::current();
+
 		for library in &self.libraries {
+			let mut have_native = false;
+			// Checking library rules (usually this means that this library is native)
+			if let Some(rules) = &library.rules {
+				for rule in rules {
+					// If our OS allowed to use that library
+					have_native = rule.check(&host);
+				}
+			}
 			// Jar library
 			if library.downloads.artifact.is_some() {
 				let artifact = library.downloads.artifact.as_ref().unwrap();
-
 				let path = format!("data/libraries/{}", artifact.path);
 
 				objects.push(DataObject {
@@ -294,13 +342,14 @@ impl VersionPackage {
 				});
 			}
 			// Native dll/so library
-			if library.downloads.classifiers.is_some() {
+			if have_native && library.downloads.classifiers.is_some() {
+				let host = format!("natives-{}", std::env::consts::OS);
 				for (name, native) in library.downloads.classifiers.as_ref().unwrap() {
-					if name != "natives-linux" {
+					if *name != host {
 						continue;
 					}
 
-					let path = format!("data/versions/{}/natives/{}", self.id, native.path);
+					let path = format!("data/libraries/{}", native.path);
 					objects.push(DataObject {
 						path,
 						..native.clone()
@@ -321,7 +370,8 @@ impl VersionPackage {
 
 			objects.push(DataObject {
 				path,
-				..self.downloads
+				..self
+					.downloads
 					.get("client")
 					.expect("failed to get minecraft client object")
 					.clone()
@@ -330,8 +380,10 @@ impl VersionPackage {
 
 		if objects.len() > poolsize {
 			println!("!!! WARNING !!!");
-			println!("Objects pool size is {}, but {} was reserved (magic number: 13)",
-				objects.len(), poolsize
+			println!(
+				"Objects pool size is {}, but {} was reserved (magic number: 13)",
+				objects.len(),
+				poolsize
 			);
 		}
 
@@ -339,28 +391,40 @@ impl VersionPackage {
 	}
 
 	pub fn extract_natives(&self) -> Result<(), Error> {
-		let host = format!("natives-{}", std::env::consts::OS);
-		println!("Extracting {}. . .", host);
+		let host = OS::current();
+		let host_str = format!("natives-{}", std::env::consts::OS);
+
+		println!("Extracting {}. . .", host_str);
+
+		let root = String::from("data/libraries");
+		let target = PathBuf::from(format!("data/versions/{}/natives", self.id));
+		fs::create_dir_all(&target)?;
+
 		for native in self
 			.libraries
 			.iter()
-			.filter(|&lib| lib.downloads.classifiers.is_some())
+			.filter(|&lib| lib.downloads.classifiers.is_some() || lib.rules.is_some())
 		{
-			for (os, object) in native.downloads.classifiers.as_ref().unwrap() {
-				if *os == host {
-					let path = PathBuf::from(format!("data/versions/{}/natives/{}",
-						self.id, object.path
-					));
-
-					let target = PathBuf::from(format!("data/versions/{}/natives/extracted",
-						self.id
-					));
-
-					let bytes = fs::read(path)?;
-
-					zip_extract::extract(io::Cursor::new(bytes), &target, true)
-						.expect("zip extraction error");
+			if let Some(rules) = native.rules.as_ref() {
+				let mut is_allowed = false;
+				for rule in rules {
+					is_allowed = rule.check(&host);
 				}
+				if !is_allowed {
+					continue;
+				}
+			}
+			if let Some(classifiers) = native.downloads.classifiers.as_ref() {
+				for (os, object) in classifiers {
+					if *os == host_str {
+						object.extract_to(&root, &target)?;
+						break;
+					}
+				}
+			}
+
+			if let Some(artifact) = native.downloads.artifact.as_ref() {
+				artifact.extract_to(&root, &target)?;
 			}
 		}
 
@@ -368,11 +432,15 @@ impl VersionPackage {
 	}
 
 	pub fn get_launch_arguments(&self, r#type: LaunchArgumentsType) -> Option<Vec<&str>> {
-		// If we have classic string with arguments in it
+		// If we have classic string with arguments
 		if let Some(arguments) = self.minecraft_arguments.as_ref() {
-			return Some(arguments.split(" ").collect());
+			match r#type {
+				LaunchArgumentsType::Game => return Some(arguments.split(" ").collect()),
+				LaunchArgumentsType::Jvm => return None,
+			}
 		}
-		// If we have some kind of pizdec
+
+		// If we have complex arguments array
 		if let Some(arguments) = self.arguments.as_ref() {
 			let iter = match r#type {
 				LaunchArgumentsType::Game => arguments.game.iter(),
@@ -386,9 +454,10 @@ impl VersionPackage {
 			for argument in iter {
 				str.push(match argument {
 					ExecArgument::String(string) => string.as_str(),
-					ExecArgument::Object(object) => {
+					ExecArgument::Object(_object) => {
+						//TODO: object parsing
 						""
-					},
+					}
 				});
 			}
 			return Some(str);
@@ -397,26 +466,21 @@ impl VersionPackage {
 		None
 	}
 }
-impl RetrieveManifest for VersionPackage {}
-
-fn check_existance(path: &Path, hash: &String) -> bool {
-	if Path::exists(path) {
-		if *hash.to_uppercase() == hash_file(path, ALGSHA1) {
-			println!("Satisfied: {}", path.to_str().unwrap());
-			return true;
-		}
-		println!("Old version: {}", path.to_str().unwrap());
-		return false;
-	}
-	
-	println!("Not exists: {}", path.to_str().unwrap());
-	return false;
-}
+impl RetrievePlainText for Vanilla {}
 
 impl DataObject {
 	pub fn is_cached(&self) -> bool {
 		let path = Path::new(&self.path);
 
-		Path::exists(path) && self.hash.to_uppercase() == hash_file(path, ALGSHA1)
+		Path::exists(path) && self.hash.to_uppercase() == hash_file(path, Algorithm::SHA1)
+	}
+
+	pub fn extract_to(&self, root: &String, target: &PathBuf) -> Result<(), Error> {
+		let bytes = fs::read(format!("{}/{}", root, self.path))?;
+
+		zip_extract::extract(io::Cursor::new(bytes), &target, true)
+			.expect("native jar extraction error");
+
+		Ok(())
 	}
 }

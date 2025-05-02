@@ -1,8 +1,7 @@
-mod auth;
 mod fetch;
 mod util;
 
-use fetch::{vanilla::Manifest, version::Version};
+use fetch::{vanilla::Manifest, minecraft::Minecraft};
 use util::error::Error;
 
 fn main() -> Result<(), Error> {
@@ -10,7 +9,7 @@ fn main() -> Result<(), Error> {
 	let manifest = Manifest::new()?;
 	let version = manifest.get_for_version(&version_id);
 	println!("\nUpdating version {}. . .", &version.id);
-	let version = Version::new(&version.id)?;
+	let version = Minecraft::new(&version.id)?;
 	version.update()?;
 	version.launch()?;
 
