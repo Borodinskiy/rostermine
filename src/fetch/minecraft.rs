@@ -15,16 +15,26 @@ use super::vanilla::{DataObject, LaunchArgumentsType, Manifest, Vanilla};
 pub struct Minecraft {
 	// Required for certain checks
 	package: Vanilla,
+
+	instance_dir: String,
+
+	assets_dir: String,
+	libraries_dir: String,
+	versions_dir: String,
 }
 
 impl Minecraft {
-	pub fn new(version_id: &String) -> Result<Self, Error> {
+	pub fn new(data_dir: String, instance_dir: String, version_id: &String) -> Result<Self, Error> {
 		let manifest = Manifest::new().unwrap();
 		let version_manifest = manifest.get_for_version(version_id);
 		//			.expect("Failed to find sufficient minecraft version");
 
 		Ok(Self {
 			package: Vanilla::new(&version_manifest)?,
+			instance_dir,
+			assets_dir: format!("{data_dir}/assets"),
+			libraries_dir: format!("{data_dir}/libraries"),
+			versions_dir: format!("{data_dir}/versions"),
 		})
 	}
 
@@ -53,7 +63,7 @@ impl Minecraft {
 		bar.set_message("DONE!");
 		bar.finish();
 
-		//self.package.extract_natives()?;
+		self.package.extract_natives()?;
 
 		Ok(())
 	}
@@ -96,20 +106,21 @@ impl Minecraft {
 			.filter(|lib| lib.downloads.artifact.is_some())
 			.map(|lib| {
 				format!(
-					"data/libraries/{}",
+					"{}/{}",
+					self.libraries_dir,
 					lib.downloads.artifact.as_ref().unwrap().path
 				)
 			})
 			.chain(vec![format!(
-				"data/libraries/net/minecraft/client/{}/client-{}-official.jar",
-				self.package.id, self.package.id
+				"{}/net/minecraft/client/{}/client-{}-official.jar",
+				self.libraries_dir, self.package.id, self.package.id
 			)])
 			.collect::<Vec<_>>()
 			.join(class_separator);
 
 		let main_class = &self.package.main_class;
 
-		let natives_directory = format!("data/versions/{}/natives", self.package.id);
+		let natives_directory = format!("{}/{}/natives", self.versions_dir, self.package.id);
 
 		let natives_override = [
 			format!("-Djava.library.path={natives_directory}"),
@@ -118,7 +129,13 @@ impl Minecraft {
 			format!("-Dio.netty.native.workdir={natives_directory}"),
 		];
 
-		let jvm_arguments = vec!["-Xms1G", "-Xmx4G"];
+		let mut jvm_arguments = vec!["-Xms1G", "-Xmx4G"];
+
+		// let logging_argument = self.package.get_logging_argument();
+
+		// if logging_argument.is_some() {
+		// 	jvm_arguments.push(logging_argument.as_ref().unwrap().as_str());
+		// }
 
 		let minecraft_jvm_arguments: Vec<&str> = self
 			.package
@@ -143,7 +160,6 @@ impl Minecraft {
 
 				_ => argument,
 			})
-			.filter(|argument| *argument != "")
 			.collect();
 
 		let minecraft_arguments: Vec<&str> = self
@@ -153,18 +169,19 @@ impl Minecraft {
 			.iter()
 			.map(|&argument| match argument {
 				"${auth_player_name}" => "Player", // Replace with real auth
-				"${version_name}" => self.package.id.as_str(),
-				"${game_directory}" => "instances/Default",
-				"${assets_root}" => "data/assets",
-				"${assets_index_name}" => self.package.assets.as_str(),
+				"${version_name}" => &self.package.id,
+				"${game_directory}" => &self.instance_dir,
+				"${assets_root}" => &self.assets_dir,
+				"${game_assets}" => &self.assets_dir,
+				"${assets_index_name}" => &self.package.assets,
 				"${auth_uuid}" => "0",
 				"${auth_access_token}" => "0",
 				"${user_type}" => "offline",
-				"${version_type}" => self.package.r#type.as_str(),
+				"${user_properties}" => "{}",
+				"${version_type}" => &self.package.r#type,
 
 				_ => argument,
 			})
-			.filter(|argument| *argument != "")
 			.collect();
 
 		let mut envs: HashMap<String, String> = Default::default();
@@ -183,11 +200,12 @@ impl Minecraft {
 		}
 
 		Command::new("java")
-			.args(dbg!(jvm_arguments))
-			.args(dbg!(minecraft_jvm_arguments))
-			.arg(dbg!(main_class))
-			.args(dbg!(minecraft_arguments))
-			.envs(dbg!(envs))
+			.current_dir(&self.instance_dir)
+			.envs(envs)
+			.args(jvm_arguments)
+			.args(minecraft_jvm_arguments)
+			.arg(main_class)
+			.args(minecraft_arguments)
 			.spawn()?
 			.wait()?;
 

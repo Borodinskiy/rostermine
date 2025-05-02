@@ -159,6 +159,7 @@ pub struct AssetsObjects {
 	pub objects: HashMap<String, DataObject>,
 }
 
+#[derive(PartialEq)]
 pub enum LaunchArgumentsType {
 	Game,
 	Jvm,
@@ -181,12 +182,12 @@ impl Rule {
 			if let Some(name) = os.name.as_ref() {
 				let hostname = host.name.as_ref().unwrap_or(&OSName::Undefined);
 				return (self.action == Action::Allow && *hostname == *name)
-				    || (self.action == Action::Disallow && *hostname != *name);
+					|| (self.action == Action::Disallow && *hostname != *name);
 			}
 			if let Some(arch) = os.arch.as_ref() {
 				let hostarch = host.arch.as_ref().unwrap_or(&OSArch::Undefined);
 				return (self.action == Action::Allow && *hostarch == *arch)
-				    || (self.action == Action::Disallow && *hostarch != *arch);
+					|| (self.action == Action::Disallow && *hostarch != *arch);
 			}
 		}
 
@@ -276,7 +277,7 @@ impl Vanilla {
 
 		text = Self::retrieve_text(&path_str, Some(&manifest.url), Some(&manifest.hash))?;
 
-		Ok(dbg!(serde_json::from_str(text.as_str())?))
+		Ok(serde_json::from_str(text.as_str())?)
 	}
 
 	pub fn get_data_objects(&self) -> Result<Vec<DataObject>, Error> {
@@ -309,8 +310,8 @@ impl Vanilla {
 		for (_, asset) in &assets_response.objects {
 			let relpath = format!("{}/{}", &asset.hash[0..2], asset.hash);
 			objects.push(DataObject {
-				path: format!("data/assets/objects/{}", relpath,),
-				url: format!("https://resources.download.minecraft.net/{}", relpath,),
+				path: format!("data/assets/objects/{}", relpath),
+				url: format!("https://resources.download.minecraft.net/{}", relpath),
 				hash: asset.hash.clone(),
 				size: asset.size,
 			});
@@ -323,12 +324,15 @@ impl Vanilla {
 		let host = OS::current();
 
 		for library in &self.libraries {
-			let mut have_native = false;
+			let mut allowed = true;
 			// Checking library rules (usually this means that this library is native)
 			if let Some(rules) = &library.rules {
 				for rule in rules {
 					// If our OS allowed to use that library
-					have_native = rule.check(&host);
+					allowed = rule.check(&host);
+				}
+				if !allowed {
+					continue;
 				}
 			}
 			// Jar library
@@ -342,7 +346,7 @@ impl Vanilla {
 				});
 			}
 			// Native dll/so library
-			if have_native && library.downloads.classifiers.is_some() {
+			if library.downloads.classifiers.is_some() {
 				let host = format!("natives-{}", std::env::consts::OS);
 				for (name, native) in library.downloads.classifiers.as_ref().unwrap() {
 					if *name != host {
@@ -375,6 +379,24 @@ impl Vanilla {
 					.get("client")
 					.expect("failed to get minecraft client object")
 					.clone()
+			});
+		}
+
+		/*
+			LOGGING
+		*/
+
+		if let Some(logging) = self.logging.get("client") {
+			let path = format!(
+				"data/assets/objects/{}/{}/{}",
+				&logging.file.hash[0..2],
+				logging.file.hash,
+				logging.file.path
+			);
+
+			objects.push(DataObject {
+				path,
+				..logging.file.clone()
 			});
 		}
 
@@ -422,13 +444,23 @@ impl Vanilla {
 					}
 				}
 			}
-
-			if let Some(artifact) = native.downloads.artifact.as_ref() {
-				artifact.extract_to(&root, &target)?;
-			}
 		}
 
 		Ok(())
+	}
+
+	pub fn get_logging_argument(&self) -> Option<String> {
+		if let Some(client) = self.logging.get("client") {
+			return Some(client.argument.replace(
+				"${path}",
+				format!(
+					"data/assets/objects/{}/{}/{}",
+					&client.file.hash[0..2], client.file.hash, client.file.path,
+				).as_str()
+			));
+		}
+
+		None
 	}
 
 	pub fn get_launch_arguments(&self, r#type: LaunchArgumentsType) -> Option<Vec<&str>> {
@@ -452,14 +484,18 @@ impl Vanilla {
 				.expect("failed to reserve memory for launch arguments generation");
 
 			for argument in iter {
-				str.push(match argument {
-					ExecArgument::String(string) => string.as_str(),
-					ExecArgument::Object(_object) => {
-						//TODO: object parsing
-						""
-					}
-				});
+				//TODO: object parsing
+				// str.push(match argument {
+				// 	ExecArgument::String(string) => string.as_str(),
+				// 	ExecArgument::Object(_object) => {
+				// 		""
+				// 	}
+				// });
+				if let ExecArgument::String(argument) = argument {
+					str.push(argument);
+				}
 			}
+
 			return Some(str);
 		}
 
