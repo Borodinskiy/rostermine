@@ -53,7 +53,7 @@ impl Minecraft {
 		bar.set_message("DONE!");
 		bar.finish();
 
-		self.package.extract_natives()?;
+		//self.package.extract_natives()?;
 
 		Ok(())
 	}
@@ -84,7 +84,12 @@ impl Minecraft {
 	}
 
 	pub fn launch(&self) -> Result<(), Error> {
-		let mut class_path_array = self
+		let class_separator = match std::env::consts::OS {
+			"linux" | "macos" => ":",
+			_ => ";",
+		};
+
+		let class_path = self
 			.package
 			.libraries
 			.iter()
@@ -95,19 +100,13 @@ impl Minecraft {
 					lib.downloads.artifact.as_ref().unwrap().path
 				)
 			})
-			.collect::<Vec<_>>();
+			.chain(vec![format!(
+				"data/libraries/net/minecraft/client/{}/client-{}-official.jar",
+				self.package.id, self.package.id
+			)])
+			.collect::<Vec<_>>()
+			.join(class_separator);
 
-		class_path_array.push(format!(
-			"data/libraries/net/minecraft/client/{}/client-{}-official.jar",
-			self.package.id, self.package.id
-		));
-
-		let class_separator = match std::env::consts::OS {
-			"linux" | "macos" => ":",
-			_ => ";",
-		};
-
-		let class_path = class_path_array.join(class_separator);
 		let main_class = &self.package.main_class;
 
 		let natives_directory = format!("data/versions/{}/natives", self.package.id);
@@ -119,19 +118,15 @@ impl Minecraft {
 			format!("-Dio.netty.native.workdir={natives_directory}"),
 		];
 
-		let jvm_arguments = vec!["-Xms1G", "-Xmx4G", "-cp", class_path.as_str()];
+		let jvm_arguments = vec!["-Xms1G", "-Xmx4G"];
 
 		let minecraft_jvm_arguments: Vec<&str> = self
 			.package
 			.get_launch_arguments(LaunchArgumentsType::Jvm)
-			.unwrap_or(vec![natives_override[0].as_str()])
+			.unwrap_or(vec![natives_override[0].as_str(), "-cp", &class_path])
 			.iter()
 			.map(|&argument| match argument {
-				// already defined
-				"-cp" => "",
-				"${classpath}" => "",
 				"-Djava.library.path=${natives_directory}" => natives_override[0].as_str(),
-
 				"-Djna.tmpdir=${natives_directory}" => natives_override[1].as_str(),
 				"-Dorg.lwjgl.system.SharedLibraryExtractPath=${natives_directory}" => {
 					natives_override[2].as_str()
@@ -143,6 +138,8 @@ impl Minecraft {
 				"-Dminecraft.launcher.version=${launcher_version}" => {
 					"-Dminecraft.launcher.version=0.1.0"
 				}
+
+				"${classpath}" => &class_path,
 
 				_ => argument,
 			})
