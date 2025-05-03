@@ -1,5 +1,5 @@
 # Rust build data
-/target
+/target*
 # Minecraft resources (assets, java libraries)
 /data
 # Modpacks and vanilla data (saves, resourcepacks, mods, etc.)

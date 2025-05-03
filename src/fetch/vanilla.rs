@@ -33,7 +33,7 @@ pub struct Manifest {
 // Here goes manifests for version package
 #[derive(Default, Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "camelCase")]
 pub struct VanillaManifest {
 	pub id: String,
 	pub r#type: String,
@@ -191,7 +191,24 @@ impl Rule {
 			}
 		}
 
-		return self.action == Action::Allow;
+		self.action == Action::Allow
+	}
+
+	pub fn check_complex(rules: &Vec<Self>, host: &OS) -> bool {
+		let mut result = false;
+		for rule in rules {
+			result = rule.check(&host);
+		}
+
+		result
+	}
+	pub fn check_some_complex(rules: Option<&Vec<Self>>, host: &OS) -> bool {
+		if let Some(rules) = rules {
+			return Self::check_complex(rules, host);
+		}
+
+		// Ignoring disallowing because of no rules was given
+		true
 	}
 }
 
@@ -228,23 +245,12 @@ impl OSArch {
 impl Manifest {
 	// Manifest is important thing for retrieving up to date game resources
 	// If we can't get it, then hash checking of saved versions won't fix errors
-	pub fn new() -> Result<Manifest, Error> {
-		let path_str = String::from("data/version_manifest_v2.json");
-		let path = Path::new(&path_str);
+	pub fn new() -> Result<Self, Error> {
+		let path = String::from("data/version_manifest_v2.json");
 
-		let url = URL_MANIFEST.to_string();
-
-		// TODO: Change hashing library to normal
-		let hash: String;
-		if Path::exists(path) {
-			hash = hash_file(path, Algorithm::SHA1);
-		} else {
-			hash = String::from("");
-		}
-
-		let text = Self::retrieve_text(&path_str, Some(&url), Some(&hash))?;
-
-		Ok(serde_json::from_str(text.as_str())?)
+		Ok(serde_json::from_str(
+			Self::retrieve_text(&path, &URL_MANIFEST.to_string(), None)?.as_str(),
+		)?)
 	}
 
 	pub fn get_for_version(&self, version_id: &String) -> VanillaManifest {
@@ -256,13 +262,14 @@ impl Manifest {
 					.iter()
 					.find(|&element| element.id == *version_id)
 				{
-					return manifest.clone();
+					manifest.clone()
 				} else {
 					print!(
 						"FAILED \"{}\": no such version. Falling back to latest release",
 						version_id
 					);
-					return self.get_for_version(&"release".to_string());
+
+					self.get_for_version(&"release".to_string())
 				}
 			}
 		}
@@ -271,13 +278,12 @@ impl Manifest {
 impl RetrievePlainText for Manifest {}
 
 impl Vanilla {
-	pub fn new(manifest: &VanillaManifest) -> Result<Vanilla, Error> {
-		let path_str = format!("data/versions/{}/{}.json", manifest.id, manifest.id);
-		let text: String;
+	pub fn new(manifest: &VanillaManifest) -> Result<Self, Error> {
+		let path = format!("data/versions/{}/{}.json", manifest.id, manifest.id);
 
-		text = Self::retrieve_text(&path_str, Some(&manifest.url), Some(&manifest.hash))?;
-
-		Ok(serde_json::from_str(text.as_str())?)
+		Ok(serde_json::from_str(
+			Self::retrieve_text(&path, &manifest.url, Some(&manifest.hash))?.as_str(),
+		)?)
 	}
 
 	pub fn get_data_objects(&self) -> Result<Vec<DataObject>, Error> {
@@ -292,7 +298,7 @@ impl Vanilla {
 			let path = format!("data/assets/indexes/{}.json", self.assets);
 			let text = Self::retrieve_text(
 				&path,
-				Some(&self.asset_index.url),
+				&self.asset_index.url,
 				Some(&self.asset_index.hash.clone().into_string()),
 			)?;
 			assets_response = serde_json::from_str(text.as_str())?;
@@ -324,16 +330,9 @@ impl Vanilla {
 		let host = OS::current();
 
 		for library in &self.libraries {
-			let mut allowed = true;
-			// Checking library rules (usually this means that this library is native)
-			if let Some(rules) = &library.rules {
-				for rule in rules {
-					// If our OS allowed to use that library
-					allowed = rule.check(&host);
-				}
-				if !allowed {
-					continue;
-				}
+			// Filtering out foreign natives
+			if !Rule::check_some_complex(library.rules.as_ref(), &host) {
+				continue;
 			}
 			// Jar library
 			if library.downloads.artifact.is_some() {
@@ -416,8 +415,6 @@ impl Vanilla {
 		let host = OS::current();
 		let host_str = format!("natives-{}", std::env::consts::OS);
 
-		println!("Extracting {}. . .", host_str);
-
 		let root = String::from("data/libraries");
 		let target = PathBuf::from(format!("data/versions/{}/natives", self.id));
 		fs::create_dir_all(&target)?;
@@ -427,14 +424,8 @@ impl Vanilla {
 			.iter()
 			.filter(|&lib| lib.downloads.classifiers.is_some() || lib.rules.is_some())
 		{
-			if let Some(rules) = native.rules.as_ref() {
-				let mut is_allowed = false;
-				for rule in rules {
-					is_allowed = rule.check(&host);
-				}
-				if !is_allowed {
-					continue;
-				}
+			if !Rule::check_some_complex(native.rules.as_ref(), &host) {
+				continue;
 			}
 			if let Some(classifiers) = native.downloads.classifiers.as_ref() {
 				for (os, object) in classifiers {
@@ -449,18 +440,34 @@ impl Vanilla {
 		Ok(())
 	}
 
-	pub fn get_logging_argument(&self) -> Option<String> {
-		if let Some(client) = self.logging.get("client") {
-			return Some(client.argument.replace(
-				"${path}",
-				format!(
-					"data/assets/objects/{}/{}/{}",
-					&client.file.hash[0..2], client.file.hash, client.file.path,
-				).as_str()
-			));
-		}
+	pub fn get_class_path(&self, libraries_dir: &String, versions_dir: &String) -> String {
+		let class_separator = match std::env::consts::OS {
+			"windows" => ";",
+			_ => ":",
+		};
 
-		None
+		self.libraries
+			.iter()
+			.filter(|lib| lib.downloads.artifact.is_some())
+			.map(|lib| {
+				format!(
+					"{}/{}",
+					libraries_dir,
+					lib.downloads.artifact.as_ref().unwrap().path
+				)
+			})
+			.chain(vec![
+				format!(
+					"{}/net/minecraft/client/{}/client-{}-official.jar",
+					libraries_dir, self.id, self.id
+				),
+				format!(
+					"{}/{}/natives",
+					versions_dir, self.id
+				),
+			])
+			.collect::<Vec<_>>()
+			.join(class_separator)
 	}
 
 	pub fn get_launch_arguments(&self, r#type: LaunchArgumentsType) -> Option<Vec<&str>> {

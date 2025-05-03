@@ -9,7 +9,7 @@ pub enum Error {
 	IO(#[from] std::io::Error),
 
 	#[error("{0}")]
-	Default(#[from] Box<dyn std::error::Error>),
+	Default(String),
 
 	#[error("json parsing: {0}")]
 	JSONParse(#[from] serde_json::Error),

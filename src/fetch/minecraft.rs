@@ -94,29 +94,7 @@ impl Minecraft {
 	}
 
 	pub fn launch(&self) -> Result<(), Error> {
-		let class_separator = match std::env::consts::OS {
-			"linux" | "macos" => ":",
-			_ => ";",
-		};
-
-		let class_path = self
-			.package
-			.libraries
-			.iter()
-			.filter(|lib| lib.downloads.artifact.is_some())
-			.map(|lib| {
-				format!(
-					"{}/{}",
-					self.libraries_dir,
-					lib.downloads.artifact.as_ref().unwrap().path
-				)
-			})
-			.chain(vec![format!(
-				"{}/net/minecraft/client/{}/client-{}-official.jar",
-				self.libraries_dir, self.package.id, self.package.id
-			)])
-			.collect::<Vec<_>>()
-			.join(class_separator);
+		let class_path = self.package.get_class_path(&self.libraries_dir, &self.versions_dir);
 
 		let main_class = &self.package.main_class;
 
@@ -129,13 +107,7 @@ impl Minecraft {
 			format!("-Dio.netty.native.workdir={natives_directory}"),
 		];
 
-		let mut jvm_arguments = vec!["-Xms1G", "-Xmx4G"];
-
-		// let logging_argument = self.package.get_logging_argument();
-
-		// if logging_argument.is_some() {
-		// 	jvm_arguments.push(logging_argument.as_ref().unwrap().as_str());
-		// }
+		let jvm_arguments = vec!["-Xms1G", "-Xmx4G"];
 
 		let minecraft_jvm_arguments: Vec<&str> = self
 			.package
@@ -198,6 +170,8 @@ impl Minecraft {
 			}
 			_ => {}
 		}
+
+		fs::create_dir_all(&self.instance_dir)?;
 
 		Command::new("java")
 			.current_dir(&self.instance_dir)

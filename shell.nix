@@ -1,12 +1,13 @@
 { pkgs ? import <nixpkgs> {}}:
 pkgs.mkShell {
 	nativeBuildInputs = with pkgs; [
+		gcc
+		pkg-config
+		cmake
+
 		rustc
 		cargo
 
-		pkg-config
-		gcc
-		cmake
 		openssl
 	];
 
@@ -23,6 +24,7 @@ pkgs.mkShell {
 		libXrandr
 		libXxf86vm
 		libpulseaudio
+		alsa-lib
 		libGL
 		glfw
 		openal

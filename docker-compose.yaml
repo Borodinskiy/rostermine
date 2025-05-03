@@ -1,0 +1,9 @@
+services:
+  builder-release:
+    image: rust:latest
+    volumes:
+      - ./:/src
+      - ./target-docker:/src/target
+    working_dir: /src
+    command: cargo build --release
+
